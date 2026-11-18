@@ -2,11 +2,11 @@
 
 StagePilot application source in `Source/` and its build configuration are provided under the GNU Affero General Public License, version 3 or later. See `LICENSE.txt`. The build pins the exact upstream JUCE commit used to build the executable. No third-party instrument binaries, presets, or samples are included. The demo uses the application's own generated sine-wave instrument.
 
-JUCE 8.0.17, commit `91ad83ae34a81e0833b1a2b0866f54846370ae53`, is used under its AGPLv3 option. Its full source, including bundled dependency notices, is available from the upstream link below. JUCE's license overview is in `Licenses/JUCE.md`. The bundled ASIO headers are used under their GPLv3 option; see `Licenses/ASIO.txt` and `Licenses/GPL-3.0.txt`. VST3 SDK is under MIT; see `Licenses/VST3.txt`.
+JUCE 8.0.15, commit `91ad83ae34a81e0833b1a2b0866f54846370ae53`, is used under its AGPLv3 option. Its full source, including bundled dependency notices, is available from the upstream link below. JUCE's license overview is in `Licenses/JUCE.md`. The bundled ASIO headers are used under their GPLv3 option; see `Licenses/ASIO.txt` and `Licenses/GPL-3.0.txt`. VST3 SDK is under MIT; see `Licenses/VST3.txt`.
 
 Graphics and codec dependency notices are included in `Licenses/` for HarfBuzz, SheenBidi, JPEG, PNG, Zlib, FLAC, and Ogg Vorbis. The dependency source archive retains all original copyright and license notices.
 
-Upstream source: [JUCE 8.0.17](https://github.com/juce-framework/JUCE/tree/8.0.17).
+Upstream source: [JUCE 8.0.15](https://github.com/juce-framework/JUCE/tree/8.0.15).
 
 To rebuild with a local JUCE checkout at the specified revision, pass its absolute path as `-DJUCE_SOURCE_DIR=...` to CMake. CMake expects that directory to contain JUCE's `CMakeLists.txt`.
 
