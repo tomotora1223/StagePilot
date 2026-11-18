@@ -2,6 +2,10 @@ package jp.stagepilot.remote;
 
 import android.app.*;
 import android.os.*;
+import android.provider.Settings;
+import android.net.Uri;
+import com.google.zxing.integration.android.IntentIntegrator;
+import com.google.zxing.integration.android.IntentResult;
 import android.content.*;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -18,8 +22,8 @@ public final class MainActivity extends Activity {
     private static final int BG=0xff101419, PANEL=0xff1b222b,INK=0xffeef3f6,MUTED=0xffa6b5c6,MINT=0xff72d6c2;
     private static final String[] COLOURS={"72d6c2","ffbb70","94baff","eaa0db","c3d77a","bdabff","ff9299","7dd7ef"};
     private static final String[] COLOUR_NAMES={"ミント","オレンジ","青","ピンク","黄緑","紫","赤","水色"};
-    private static final String[] UTILITY_ACTIONS={"next","previous","fade","restore","panic","effectsStop","sequence","sequenceStop","transpose","transposeUp","transposeDown","master","masterStep","pitch"};
-    private static final String[] UTILITY_NAMES={"次の音色","前の音色","ゆっくり消音","音量を戻す","すべての音を止める","効果音をすべて停止","打ち込みを再生","打ち込みを停止","移調を指定して切替","移調を＋1半音","移調を−1半音","全体音量を指定","全体音量を増減","ピッチベンドのレバー"};
+    private static final String[] UTILITY_ACTIONS={"next","previous","fade","restore","panic","effectsStop","sequence","sequenceStop","transpose","transposeUp","transposeDown","master","masterStep","pitch","modulation","expression"};
+    private static final String[] UTILITY_NAMES={"次の音色","前の音色","ゆっくり消音","音量を戻す","すべての音を止める","効果音をすべて停止","打ち込みを再生","打ち込みを停止","移調を指定して切替","移調を＋1半音","移調を−1半音","全体音量を指定","全体音量を増減","ピッチベンドのレバー","モジュレーションのレバー","エクスプレッションのレバー"};
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ScheduledExecutorService poller=Executors.newSingleThreadScheduledExecutor();
     private final ThreadPoolExecutor commands=new ThreadPoolExecutor(1,1,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(8));
@@ -61,13 +65,13 @@ public final class MainActivity extends Activity {
             lever.setContentDescription("ピッチベンド");lever.setTag(tag+"-lever");
             lever.setVisibility(GONE);words.addView(lever,new LinearLayout.LayoutParams(-1,dp(38)));
             lever.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener(){
-                public void onProgressChanged(SeekBar bar,int value,boolean user){if(user&&pitchBar==bar)pitchValue=value;}
+                public void onProgressChanged(SeekBar bar,int value,boolean user){if(user&&activeLever==bar)leverValue=value;}
                 public void onStartTrackingTouch(SeekBar bar){
-                    endPitch();
+                    endLever();
                     bar.getParent().requestDisallowInterceptTouchEvent(true);
-                    pitchBar=bar;pitchValue=bar.getProgress();main.post(pitchTick);
+                    activeLever=bar;leverAction=(String)bar.getTag(R.id.lever_action);leverValue=bar.getProgress();main.post(leverTick);
                 }
-                public void onStopTrackingTouch(SeekBar bar){if(pitchBar==bar)endPitch();}
+                public void onStopTrackingTouch(SeekBar bar){if(activeLever==bar)endLever();}
             });
             for(TextView t:new TextView[]{caption,source,state})t.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         }
@@ -78,38 +82,47 @@ public final class MainActivity extends Activity {
             setContentDescription(name+"、"+description+"、"+message);
         }
     }
-    private SeekBar pitchBar;
-    private int pitchValue=8192;
-    private boolean pitchInFlight;
-    private final Runnable pitchTick=new Runnable(){
+    private SeekBar activeLever;
+    private String leverAction="pitch";
+    private int leverValue;
+    private boolean leverInFlight;
+    private long wheelPendingUntil;
+    private final Runnable leverTick=new Runnable(){
         public void run(){
-            if(pitchBar==null||!foreground||!ready){endPitch();return;}
-            sendPitch(pitchValue);
+            if(activeLever==null||!foreground||!ready){endLever();return;}
+            sendLever(leverAction,leverValue,false);
             main.postDelayed(this,50);
         }
     };
-    private void endPitch(){
-        main.removeCallbacks(pitchTick);
-        if(pitchBar==null)return;
-        pitchBar.setProgress(8192);
-        pitchBar.getParent().requestDisallowInterceptTouchEvent(false);
-        pitchBar=null;
-        sendPitch(8192);
+    private static boolean isWheel(String action){return action.equals("modulation")||action.equals("expression");}
+    private static boolean isLever(String action){return action.equals("pitch")||isWheel(action);}
+    private void endLever(){
+        main.removeCallbacks(leverTick);
+        if(activeLever==null)return;
+        if(leverAction.equals("pitch")){
+            activeLever.setProgress(8192);
+            leverValue=8192;
+        }else{
+            wheelPendingUntil=SystemClock.elapsedRealtime()+700;
+        }
+        activeLever.getParent().requestDisallowInterceptTouchEvent(false);
+        activeLever=null;
+        sendLever(leverAction,leverValue,true);
     }
-    private void sendPitch(int value){
+    private void sendLever(String action,int value,boolean finalValue){
         RemoteClient target=client;
-        if(target==null||(!ready&&value!=8192)||(pitchInFlight&&value!=8192))return;
-        pitchInFlight=true;
+        if(target==null||(!ready&&!finalValue)||(leverInFlight&&!finalValue))return;
+        leverInFlight=true;
         long pressed=SystemClock.elapsedRealtime();
         try{
             commands.execute(()->{
-                try{if(client==target&&(value==8192||foreground)&&SystemClock.elapsedRealtime()-pressed<220)
-                    target.command("pitch",0,value);
+                try{if(client==target&&(finalValue||foreground)&&SystemClock.elapsedRealtime()-pressed<400)
+                    target.command(action,0,value);
                 }catch(Exception ignored){
-                    // The PC returns to centre if the stream stops.
-                }finally{main.post(()->pitchInFlight=false);}
+                    // Pitch returns to centre on the PC if its stream stops.
+                }finally{main.post(()->leverInFlight=false);}
             });
-        }catch(RejectedExecutionException ex){pitchInFlight=false;}
+        }catch(RejectedExecutionException ex){leverInFlight=false;}
     }
     private long lastPress=0;
     private AlertDialog openDialog;
@@ -120,7 +133,7 @@ public final class MainActivity extends Activity {
         poller.scheduleWithFixedDelay(this::poll,0,450,TimeUnit.MILLISECONDS);
     }
     @Override protected void onResume(){super.onResume();foreground=true;refreshUi();}
-    @Override protected void onPause(){endPitch();foreground=false;ready=false;super.onPause();}
+    @Override protected void onPause(){endLever();foreground=false;ready=false;super.onPause();}
     @Override protected void onDestroy(){client=null;poller.shutdownNow();commands.shutdownNow();super.onDestroy();}
     private int dp(float n){return (int)(n*getResources().getDisplayMetrics().density+.5f);}
     private TextView text(String value,int size,int color){TextView t=new TextView(this);t.setTypeface(regular);t.setText(value);t.setTextSize(size);t.setTextColor(color);t.setGravity(Gravity.CENTER_VERTICAL);t.setLineSpacing(0,1.04f);return t;}
@@ -138,7 +151,7 @@ public final class MainActivity extends Activity {
         compact=getResources().getConfiguration().screenHeightDp<500;
         root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setBackgroundColor(BG);root.setPadding(dp(14),dp(6),dp(14),dp(6));
         root.setOnApplyWindowInsetsListener((v,insets)->{if(Build.VERSION.SDK_INT>=30){android.graphics.Insets system=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.displayCutout());root.setPadding(dp(14)+system.left,dp(6)+system.top,dp(14)+system.right,dp(6)+system.bottom);}else root.setPadding(dp(14)+insets.getSystemWindowInsetLeft(),dp(6)+insets.getSystemWindowInsetTop(),dp(14)+insets.getSystemWindowInsetRight(),dp(6)+insets.getSystemWindowInsetBottom());return insets;});
-        LinearLayout header=row();TextView title=text("StagePilot",compact?22:24,INK);title.setTypeface(bold);title.setTag("brand");header.addView(title,new LinearLayout.LayoutParams(0,-2,1));edit=button("編集","edit");edit.setContentDescription("ボタンの配置を編集");header.addView(edit,new LinearLayout.LayoutParams(dp(64),-2));Button connect=button("接続","connect");LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(dp(64),-2);cp.setMargins(dp(8),0,0,0);header.addView(connect,cp);header.setMinimumHeight(dp(compact?38:46));root.addView(header);connect.setOnClickListener(v->connectionDialog());edit.setOnClickListener(v->{endPitch();editing=!editing;if(!editing)feedback.setText("ボタンを押すとPCを操作します");refreshUi();});
+        LinearLayout header=row();TextView title=text("StagePilot",compact?22:24,INK);title.setTypeface(bold);title.setTag("brand");header.addView(title,new LinearLayout.LayoutParams(0,-2,1));edit=button("編集","edit");edit.setContentDescription("ボタンの配置を編集");header.addView(edit,new LinearLayout.LayoutParams(dp(64),-2));Button connect=button("接続","connect");LinearLayout.LayoutParams cp=new LinearLayout.LayoutParams(dp(64),-2);cp.setMargins(dp(8),0,0,0);header.addView(connect,cp);header.setMinimumHeight(dp(compact?38:46));root.addView(header);connect.setOnClickListener(v->connectionDialog());edit.setOnClickListener(v->{endLever();editing=!editing;if(!editing)feedback.setText("ボタンを押すとPCを操作します");refreshUi();});
         status=text("未接続 / PCのスマホ連携を開始してください",12,MUTED);status.setTag("status");status.setMaxLines(2);root.addView(status,new LinearLayout.LayoutParams(-1,-2));
         LinearLayout current=row();active=text("現在：—",compact?16:20,INK);active.setTypeface(bold);active.setTag("active");active.setPadding(0,dp(compact?0:6),dp(8),dp(compact?0:6));current.addView(active,new LinearLayout.LayoutParams(0,-2,1));activeShift=text("",12,0xffffbb70);activeShift.setTag("active-shift");current.addView(activeShift,new LinearLayout.LayoutParams(-2,-2));root.addView(current);
         LinearLayout pages=row();for(int i=0;i<3;++i){final int bank=i;pageButtons[i]=button(pageNames[i],"page"+i);weighted(pages,pageButtons[i],compact?30:40);pageButtons[i].setOnClickListener(v->{page=bank;rebuildGrid();refreshUi();});pageButtons[i].setOnLongClickListener(v->{if(!editing)return false;EditText name=new EditText(this);name.setText(pageNames[bank]);new AlertDialog.Builder(this).setTitle("ページの名前").setView(name).setPositiveButton("保存",(d,w)->{String value=name.getText().toString().trim();if(!value.isEmpty())pageNames[bank]=value.substring(0,Math.min(12,value.length()));saveLayout();refreshUi();}).setNegativeButton("取消",null).show();return true;});}layoutButton=button("配置","layout");layoutButton.setVisibility(View.GONE);pages.addView(layoutButton,new LinearLayout.LayoutParams(dp(64),-2));layoutButton.setOnClickListener(v->layoutDialog());root.addView(pages);
@@ -150,8 +163,8 @@ public final class MainActivity extends Activity {
         setContentView(root);refreshUi();
     }
     private void rebuildGrid(){
-        if(grid==null)return;endPitch();grid.removeAllViews();Arrays.fill(padButtons,null);int columns=columnCounts[page]==0?(getResources().getConfiguration().screenWidthDp>=650?4:2):columnCounts[page];grid.setColumnCount(columns);
-        for(int i=0;i<padCounts[page];++i){final int at=i;PadButton b=new PadButton("pad"+i);GridLayout.LayoutParams p=new GridLayout.LayoutParams();p.columnSpec=GridLayout.spec(i%grid.getColumnCount(),1,1f);p.rowSpec=GridLayout.spec(i/grid.getColumnCount(),GridLayout.FILL);p.width=0;p.height=-2;p.setMargins(dp(4),dp(4),dp(4),dp(4));grid.addView(b,p);padButtons[i]=b;b.setOnClickListener(v->{int slot=page*MAX_PADS+at;if(editing||pads[slot].optString("action").isEmpty())editPad(slot);else if(!pads[slot].optString("action").equals("pitch"))triggerPad(slot);});b.setOnLongClickListener(v->{if(editing)editPad(page*MAX_PADS+at);else{JSONObject pad=pads[page*MAX_PADS+at];new AlertDialog.Builder(this).setTitle(pad.optString("name","未設定")).setMessage(isTarget(pad.optString("action"))?actualName(pad.optString("action"),pad.optInt("index")):"「編集」で名前・操作・色を変更できます。").setPositiveButton("閉じる",null).show();}return true;});}
+        if(grid==null)return;endLever();grid.removeAllViews();Arrays.fill(padButtons,null);int columns=columnCounts[page]==0?(getResources().getConfiguration().screenWidthDp>=650?4:2):columnCounts[page];grid.setColumnCount(columns);
+        for(int i=0;i<padCounts[page];++i){final int at=i;PadButton b=new PadButton("pad"+i);GridLayout.LayoutParams p=new GridLayout.LayoutParams();p.columnSpec=GridLayout.spec(i%grid.getColumnCount(),1,1f);p.rowSpec=GridLayout.spec(i/grid.getColumnCount(),GridLayout.FILL);p.width=0;p.height=-2;p.setMargins(dp(4),dp(4),dp(4),dp(4));grid.addView(b,p);padButtons[i]=b;b.setOnClickListener(v->{int slot=page*MAX_PADS+at;if(editing||pads[slot].optString("action").isEmpty())editPad(slot);else if(!isLever(pads[slot].optString("action")))triggerPad(slot);});b.setOnLongClickListener(v->{if(editing)editPad(page*MAX_PADS+at);else{JSONObject pad=pads[page*MAX_PADS+at];new AlertDialog.Builder(this).setTitle(pad.optString("name","未設定")).setMessage(isTarget(pad.optString("action"))?actualName(pad.optString("action"),pad.optInt("index")):"「編集」で名前・操作・色を変更できます。").setPositiveButton("閉じる",null).show();}return true;});}
     }
     private void layoutDialog(){
         int bank=page;LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);form.setPadding(dp(20),dp(8),dp(20),dp(8));
@@ -160,15 +173,48 @@ public final class MainActivity extends Activity {
         ScrollView scroll=new ScrollView(this);scroll.addView(form);openDialog=new AlertDialog.Builder(this).setTitle("グリッドの配置").setView(scroll).setPositiveButton("保存",(d,w)->{columnCounts[bank]=columns.getSelectedItemPosition();padCounts[bank]=count.getSelectedItemPosition()+1;saveLayout();rebuildGrid();refreshUi();}).setNegativeButton("取消",null).create();openDialog.show();
     }
     private RemoteClient.Config storedConfig(){return new RemoteClient.Config(prefs.getString("host",""),prefs.getInt("port",18760),prefs.getString("token",""),prefs.getInt("mode",0));}
+    static RemoteClient.Config parsePairing(String payload,int mode) {
+        if(payload==null||payload.length()>220)return null;
+        Uri uri=Uri.parse(payload.trim());
+        if(!"stagepilot".equals(uri.getScheme())||uri.getHost()==null||uri.getUserInfo()!=null||
+           uri.getQuery()!=null||uri.getFragment()!=null||uri.getPathSegments().size()!=1)return null;
+        String key=uri.getLastPathSegment();
+        if(key==null||!key.matches("[A-Za-z0-9_-]{8,128}"))return null;
+        RemoteClient.Config config=new RemoteClient.Config(uri.getHost(),uri.getPort(),key,mode);
+        return config.valid()?config:null;
+    }
+    @Override protected void onActivityResult(int requestCode,int resultCode,Intent data){
+        IntentResult result=IntentIntegrator.parseActivityResult(requestCode,resultCode,data);
+        if(result==null){super.onActivityResult(requestCode,resultCode,data);return;}
+        if(result.getContents()==null)return;
+        RemoteClient.Config config=parsePairing(result.getContents(),storedConfig().mode);
+        if(config==null){Toast.makeText(this,"StagePilotの接続QRを読み取ってください",Toast.LENGTH_LONG).show();return;}
+        if(openDialog!=null)openDialog.dismiss();
+        activate(config);
+    }
+    private void bluetoothGuide(){
+        new AlertDialog.Builder(this).setTitle("Bluetoothで接続")
+            .setMessage("① PCとスマホをBluetoothでペアリングします。\n② スマホのテザリング設定で「Bluetoothテザリング」をオンにします。\n③ Windowsでスマホの「PANに参加」を選びます。\n④ PCのスマホ連携でBluetooth側のIPを選び、QRを読みます。")
+            .setPositiveButton("Bluetooth設定を開く",(d,w)->startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)))
+            .setNegativeButton("閉じる",null).show();
+    }
     private void connectionDialog(){
         LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);form.setPadding(dp(20),dp(8),dp(20),dp(8));RemoteClient.Config old=storedConfig();
-        TextView hint=text("PCで「スマホ連携」を開始し、同じWi-FiまたはUSBテザリングで接続します。",15,INK);form.addView(hint);EditText host=new EditText(this);host.setSingleLine(true);host.setHint("PCのIPアドレス  例：192.168.1.10");host.setText(old.host);host.setTag("host");form.addView(host);EditText port=new EditText(this);port.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);port.setText(""+old.port);port.setHint("基本ポート");port.setTag("port");form.addView(port);EditText token=new EditText(this);token.setSingleLine(true);token.setHint("PCに表示される接続キー");token.setText(old.token);token.setTag("token");form.addView(token);
-        Spinner mode=new Spinner(this);mode.setAdapter(choices(Arrays.asList("HTTP / おすすめ・確認応答あり","TCP / 確認応答あり","OSC / UDP / 再送と重複除去あり")));mode.setSelection(old.mode);mode.setTag("mode");form.addView(text("通信方式",13,MUTED));form.addView(mode);Button paste=button("接続情報を貼り付け","paste");form.addView(paste);paste.setOnClickListener(v->{try{android.content.ClipboardManager clipboard=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);String s=clipboard.getPrimaryClip().getItemAt(0).coerceToText(this).toString();android.net.Uri uri=android.net.Uri.parse(s.trim());if(!"stagepilot".equals(uri.getScheme()))throw new Exception();host.setText(uri.getHost());port.setText(""+uri.getPort());token.setText(uri.getLastPathSegment());}catch(Exception ex){Toast.makeText(this,"PCの「接続情報をコピー」で取得した内容を貼り付けてください",Toast.LENGTH_LONG).show();}});
+        TextView hint=text("同じWi-Fi、USBまたはBluetoothテザリングでつないでから、PC側で「スマホ連携」を開始します。",15,INK);form.addView(hint);
+        Button qr=button("QRを読む","scan-qr");form.addView(qr);
+        qr.setOnClickListener(v->new IntentIntegrator(this).setDesiredBarcodeFormats(IntentIntegrator.QR_CODE)
+            .setPrompt("PCの「スマホ連携」に表示したQRを読み取ります")
+            .setOrientationLocked(false).setBeepEnabled(false).initiateScan());
+        Button bluetooth=button("Bluetoothで接続する手順","bluetooth-guide");form.addView(bluetooth);
+        bluetooth.setOnClickListener(v->bluetoothGuide());
+        form.addView(text("手動で入力",13,MUTED));
+        EditText host=new EditText(this);host.setSingleLine(true);host.setHint("PCのIPアドレス  例：192.168.1.10");host.setText(old.host);host.setTag("host");form.addView(host);EditText port=new EditText(this);port.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);port.setText(""+old.port);port.setHint("基本ポート");port.setTag("port");form.addView(port);EditText token=new EditText(this);token.setSingleLine(true);token.setHint("PCに表示される接続キー");token.setText(old.token);token.setTag("token");form.addView(token);
+        Spinner mode=new Spinner(this);mode.setAdapter(choices(Arrays.asList("HTTP / おすすめ・確認応答あり","TCP / 確認応答あり","OSC / UDP / 再送と重複除去あり")));mode.setSelection(old.mode);mode.setTag("mode");form.addView(text("通信方式",13,MUTED));form.addView(mode);Button paste=button("接続情報を貼り付け","paste");form.addView(paste);paste.setOnClickListener(v->{try{android.content.ClipboardManager clipboard=(android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);String s=clipboard.getPrimaryClip().getItemAt(0).coerceToText(this).toString();RemoteClient.Config config=parsePairing(s,mode.getSelectedItemPosition());if(config==null)throw new IllegalArgumentException();host.setText(config.host);port.setText(""+config.port);token.setText(config.token);}catch(Exception ex){Toast.makeText(this,"PCの「接続情報をコピー」で取得した内容を貼り付けてください",Toast.LENGTH_LONG).show();}});
         ScrollView scroll=new ScrollView(this);scroll.addView(form);AlertDialog dialog=new AlertDialog.Builder(this).setTitle("PCに接続").setView(scroll).setPositiveButton("接続",null).setNegativeButton("取消",null).setNeutralButton("接続解除",(d,w)->{client=null;ready=false;commands.getQueue().clear();prefs.edit().putBoolean("connected",false).apply();refreshUi();}).create();openDialog=dialog;dialog.setOnShowListener(d->{for(int which:new int[]{-1,-2,-3})dialog.getButton(which).setSoundEffectsEnabled(false);dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{int number;try{number=Integer.parseInt(port.getText().toString());}catch(Exception ex){number=0;}RemoteClient.Config c=new RemoteClient.Config(host.getText().toString().trim(),number,token.getText().toString().trim(),mode.getSelectedItemPosition());if(!c.valid()){Toast.makeText(this,"IP・ポート・接続キーを確認してください",Toast.LENGTH_LONG).show();return;}activate(c);dialog.dismiss();});});dialog.show();
     }
     void activate(RemoteClient.Config config){ready=false;failures=0;commands.getQueue().clear();client=new RemoteClient(config);prefs.edit().putString("host",config.host).putInt("port",config.port).putString("token",config.token).putInt("mode",config.mode).putBoolean("connected",true).apply();feedback.setText("接続を確認中…");refreshUi();}
     private void poll(){RemoteClient target=client;if(!foreground||target==null)return;try{JSONObject state=target.state();main.post(()->{if(client!=target||!foreground)return;snapshot=state;ready=state.optBoolean("ready",false);failures=0;String catalog=String.valueOf(state.optJSONArray("items"))+state.optString("session");if(!catalog.equals(cachedCatalog)){cachedCatalog=catalog;prefs.edit().putString("catalog",state.toString()).apply();}if(!prefs.getBoolean("initialized",false)){autoLayout(state);prefs.edit().putBoolean("initialized",true).apply();}refreshUi();});}catch(Exception ex){main.post(()->{if(client!=target||!foreground)return;ready=false;++failures;refreshUi();status.setText("切断 / "+friendlyError(ex));});}}
-    private String friendlyError(Exception ex){if(ex instanceof java.net.SocketTimeoutException||ex instanceof java.net.ConnectException||ex instanceof java.net.UnknownHostException)return "PC・IP・Wi-Fiを確認してください";return ex.getMessage()==null?"通信できません":ex.getMessage();}
+    private String friendlyError(Exception ex){if(ex instanceof java.net.SocketTimeoutException||ex instanceof java.net.ConnectException||ex instanceof java.net.UnknownHostException)return "PCの連携開始と、Wi-Fi・テザリングの接続を確認してください";return ex.getMessage()==null?"通信できません":ex.getMessage();}
     private void autoLayout(JSONObject state){
         JSONArray items=state.optJSONArray("items");if(items==null)return;int sound=0,effect=MAX_PADS;
         // A single performance page follows the same instrument-then-scene order as the PC.
@@ -199,13 +245,27 @@ public final class MainActivity extends Activity {
             String description=empty?"":missing?(oldStep?"PC版0.18へ更新してください":"PCのセットにありません"):isTarget(action)?kindLabel(action)+(action.equals("effect")?" "+(index+1):"")+(name.equals(actualName(action,index))?"":"\n"+actualName(action,index)):action.equals("transpose")?"全体移調 → "+shiftLabel(p.optInt("value",0)):isStep(action)?"全体移調を"+(action.equals("transposeUp")?"＋1":"−1")+"半音":"操作ボタン";
             String message=empty?(editing?"押して作成":"押して割り当て"):editing?"押して編集":!ready?"未接続":selected?(action.equals("transpose")?"適用中":"演奏中"):isPlaying?"再生中":action.equals("effect")?"押して再生":isTarget(action)||action.equals("transpose")?"押して切替":"押して操作";
             JSONArray extra=p.optJSONArray("extra");
-            boolean pitch=action.equals("pitch"), advanced=pitch||isVolume(action)||(extra!=null&&extra.length()>0);
+            boolean pitch=action.equals("pitch"), wheel=isWheel(action), lever=isLever(action), advanced=pitch||isVolume(action)||(extra!=null&&extra.length()>0);
             if(advanced&&!snapshot.optBoolean("remoteControls")){missing=true;description="PC版0.21に更新してください";}
+            else if(wheel){
+                description=action.equals("modulation")?"モジュレーション · CC1":"エクスプレッション · CC11";
+                message=editing?"押して編集":ready?"離した位置を保持":"未接続";
+                if(!snapshot.optBoolean("remoteWheels")){missing=true;description="PC版0.22に更新してください";}
+            }
             else if(pitch){description="ピッチベンド";message=editing?"押して編集":ready?"離すと中央に戻ります":"未接続";}
             else if(extra!=null&&extra.length()>0){description=(extra.length()+1)+"つの操作";if(ready&&!editing)message="押してまとめて実行";}
             else if(isVolume(action))description=p.optInt("value")+"% "+(action.equals("masterStep")?"増減":"に設定");
-            padButtons[i].lever.setVisibility(pitch&&!editing?View.VISIBLE:View.GONE);
-            padButtons[i].lever.setEnabled(ready&&!missing);
+            SeekBar slider=padButtons[i].lever;
+            if(lever&&!action.equals(slider.getTag(R.id.lever_action))){
+                slider.setTag(R.id.lever_action,action);
+                slider.setMax(pitch?16383:127);
+                slider.setProgress(pitch?8192:action.equals("expression")?127:0);
+                slider.setContentDescription(pitch?"ピッチベンド":action.equals("modulation")?"モジュレーション":"エクスプレッション");
+            }
+            if(wheel&&activeLever!=slider&&SystemClock.elapsedRealtime()>=wheelPendingUntil)
+                slider.setProgress(snapshot.optInt(action,action.equals("expression")?127:0));
+            slider.setVisibility(lever&&!editing?View.VISIBLE:View.GONE);
+            slider.setEnabled(ready&&!missing);
             padButtons[i].display(empty?"未設定":name,description,message,empty?MUTED:accent,selected||isPlaying,empty);padButtons[i].setEnabled(editing||empty||(ready&&!missing));padButtons[i].setAlpha(!editing&&!empty&&(!ready||missing)?.75f:1f);}
         volume.setEnabled(ready);if(!volumeTracking){updatingVolume=true;int value=(int)Math.round(snapshot.optDouble("master",.7)*100);volume.setProgress(value);volumeLabel.setText("全体 "+value+"%");updatingVolume=false;}if(editing)feedback.setText("ボタンを押すと名前・操作・色を変更できます。ページ名は長押しで変更。");
     }
@@ -226,7 +286,7 @@ public final class MainActivity extends Activity {
                 option(kindLabel(kind)+" · "+name,kind,item.optInt("index"));
             }
             for(int i=0;i<UTILITY_ACTIONS.length;++i)
-                if(primary||!UTILITY_ACTIONS[i].equals("pitch"))option(UTILITY_NAMES[i],UTILITY_ACTIONS[i],0);
+                if(primary||!isLever(UTILITY_ACTIONS[i]))option(UTILITY_NAMES[i],UTILITY_ACTIONS[i],0);
             if(items!=null)for(int i=0;i<items.length();++i){
                 JSONObject item=items.optJSONObject(i);
                 if(item!=null&&item.optString("kind").equals("instrument"))
@@ -289,7 +349,7 @@ public final class MainActivity extends Activity {
         ArrayList<OperationEditor> editors=new ArrayList<>();
         Button append=button("次の操作を追加","add-operation");form.addView(append);
         Runnable visibility=()->{
-            boolean button=!first.key().equals("pitch");
+            boolean button=!isLever(first.key());
             more.setVisibility(button?View.VISIBLE:View.GONE);
             append.setVisibility(button&&editors.size()<7?View.VISIBLE:View.GONE);
         };
@@ -326,7 +386,7 @@ public final class MainActivity extends Activity {
                         "移調 "+shiftLabel(pad.optInt("value")):first.labels.get(first.action.getSelectedItemPosition());
                     pad.put("name",caption.substring(0,Math.min(caption.length(),24))).put("color",COLOURS[color.getSelectedItemPosition()]);
                     JSONArray extra=new JSONArray();
-                    if(!first.key().equals("pitch"))for(OperationEditor editor:editors)extra.put(editor.operation());
+                    if(!isLever(first.key()))for(OperationEditor editor:editors)extra.put(editor.operation());
                     if(extra.length()>0)pad.put("extra",extra);
                     pads[slot]=pad;saveLayout();refreshUi();openDialog.dismiss();
                 }catch(JSONException ex){Toast.makeText(this,"操作を保存できませんでした",Toast.LENGTH_SHORT).show();}

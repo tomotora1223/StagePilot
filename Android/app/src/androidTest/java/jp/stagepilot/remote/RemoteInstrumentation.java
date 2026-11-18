@@ -32,6 +32,15 @@ public final class RemoteInstrumentation extends Instrumentation {
     private void configureUtility(int pad,String actionName)throws Exception{
         runOnMainSync(()->{activity.testPage(2);activity.testView("edit").performClick();activity.testPad(pad);Spinner actions=(Spinner)activity.testDialogView("pad-action");for(int n=0;n<actions.getCount();++n)if(actions.getItemAtPosition(n).toString().equals(actionName)){actions.setSelection(n);break;}});waitForIdleSync();runOnMainSync(()->{((EditText)activity.testDialogView("pad-name")).setText("");activity.testDialogSave();activity.testView("edit").performClick();});waitForIdleSync();
     }
+    private void moveLever(SeekBar slider) {
+        long now=android.os.SystemClock.uptimeMillis();
+        float x=slider.getWidth()/2f,y=slider.getHeight()/2f;
+        for(int event:new int[]{android.view.MotionEvent.ACTION_DOWN,android.view.MotionEvent.ACTION_UP}){
+            android.view.MotionEvent motion=android.view.MotionEvent.obtain(now,now,event,x,y,0);
+            slider.onTouchEvent(motion);
+            motion.recycle();
+        }
+    }
     private void selectOperation(String tag,String label){
         Spinner field=(Spinner)activity.testDialogView(tag);
         for(int n=0;n<field.getCount();++n)if(label.equals(field.getItemAtPosition(n).toString())){field.setSelection(n);return;}
@@ -72,7 +81,7 @@ public final class RemoteInstrumentation extends Instrumentation {
             connectThroughUi(0);check(waitFor(()->uiBoolean(activity::testReady),4000),"Recovery reconnects and enables buttons");runOnMainSync(()->{activity.testPage(0);activity.testPad(2);});check(waitFor(()->state().optInt("scene",-1)==0,3000),"Named scene button works after reconnect");screenshot("Android-演奏");
             check(uiBoolean(activity::testTextFits),"Portrait names, status, page buttons and volume fit measured text layouts");ActivityMonitor rotation=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(()->activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));Activity rotated=rotation.waitForActivityWithTimeout(4000);if(rotated instanceof MainActivity)activity=(MainActivity)rotated;removeMonitor(rotation);check(waitFor(()->uiBoolean(activity::testReady),4000)&&uiBoolean(()->activity.testColumns()==4),"Landscape recreation preserves connection and uses four pad columns");check(uiBoolean(activity::testAllPadsVisible),"All eight landscape buttons fit without scrolling");check(uiBoolean(activity::testTextFits),"Landscape names and status retain measured line height");screenshot("Android-横画面");
             ActivityMonitor portrait=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(()->activity.setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));Activity back=portrait.waitForActivityWithTimeout(4000);if(back instanceof MainActivity)activity=(MainActivity)back;removeMonitor(portrait);check(waitFor(()->uiBoolean(activity::testReady),4000)&&uiBoolean(()->activity.testColumns()==2),"Portrait recreation preserves named layout and restores two columns");screenshot("Android-演奏");
-            runOnMainSync(()->activity.testPage(2));configureGrid(12,3);check(uiBoolean(()->activity.testColumns()==3&&activity.testView("pad11")!=null&&activity.testView("pad12")==null),"Page grid changes to 12 buttons in 3 columns");screenshot("Android-12ボタン3列");configureGrid(32,4);configureUtility(31,"移調を＋1半音");runOnMainSync(()->((ScrollView)activity.testView("pad-scroll")).fullScroll(android.view.View.FOCUS_DOWN));waitForIdleSync();check(uiBoolean(()->activity.testView("pad31").getGlobalVisibleRect(new android.graphics.Rect())&&activity.testView("volume").isShown()),"32nd button reachable with persistent master volume");screenshot("Android-32ボタン4列");
+            runOnMainSync(()->activity.testPage(2));configureGrid(12,3);check(uiBoolean(()->activity.testColumns()==3&&activity.testView("pad11")!=null&&activity.testView("pad12")==null),"Page grid changes to 12 buttons in 3 columns");screenshot("Android-12ボタン3列");configureGrid(32,4);configureUtility(31,"移調を＋1半音");runOnMainSync(()->{ScrollView list=(ScrollView)activity.testView("pad-scroll");list.scrollTo(0,list.getChildAt(0).getHeight());});check(waitFor(()->uiBoolean(()->activity.testView("pad31").getGlobalVisibleRect(new android.graphics.Rect())&&activity.testView("volume").isShown()),1500),"32nd button reachable with persistent master volume");screenshot("Android-32ボタン4列");
             configureGrid(8,2);check(uiBoolean(()->activity.testView("pad31")==null),"Reducing button count hides extra buttons");configureGrid(32,4);check(uiBoolean(()->((TextView)activity.testView("pad31-caption")).getText().toString().equals("移調を＋1半音")),"Restoring button count retains hidden assignment");runOnMainSync(()->activity.testPage(0));check(uiBoolean(()->activity.testColumns()==2&&activity.testView("pad8")==null),"Grid preferences are independent per page");runOnMainSync(()->activity.finish());waitForIdleSync();activity=(MainActivity)startActivitySync(intent);check(waitFor(()->uiBoolean(activity::testReady),5000),"Reconnect after saving expanded grid");runOnMainSync(()->activity.testPage(2));check(uiBoolean(()->activity.testColumns()==4&&activity.testView("pad31")!=null),"32-button 4-column grid persists after relaunch");runOnMainSync(()->activity.testPad(31));check(waitFor(()->state().optInt("transpose")== -2,2500),"Saved 32nd button sends increment after relaunch");
             runOnMainSync(()->{activity.testView("edit").performClick();activity.testPad(8);selectOperation("pad-action","移調を指定して切替");});
             waitForIdleSync();
@@ -85,6 +94,24 @@ public final class RemoteInstrumentation extends Instrumentation {
             waitForIdleSync();
             check(uiBoolean(()->activity.testView("pad9-lever").isShown()&&activity.testView("pad9-lever").isEnabled()),"Pitch lever is displayed and enabled in its chosen grid slot");
             screenshot("Android-複数操作とピッチベンド");
+            configureUtility(10,"モジュレーションのレバー");
+            runOnMainSync(()->activity.testPage(2));
+            Thread.sleep(300);
+            runOnMainSync(()->moveLever((SeekBar)activity.testView("pad10-lever")));
+            check(waitFor(()->state().optInt("modulation")>0,3000),"Dragging an Android modulation lever sends and holds CC1");
+            configureUtility(11,"エクスプレッションのレバー");
+            runOnMainSync(()->activity.testPage(2));
+            Thread.sleep(300);
+            runOnMainSync(()->moveLever((SeekBar)activity.testView("pad11-lever")));
+            check(waitFor(()->state().optInt("expression",127)<100,3000)&&state().optInt("modulation")>0,"Expression and modulation have independent positions");
+            check(MainActivity.parsePairing("https://10.0.2.2:19780/stagepilot-test",0)==null&&
+                  MainActivity.parsePairing("stagepilot://10.0.2.2:19780/short",0)==null,"Reject non-StagePilot QR payload and short keys");
+            runOnMainSync(()->{
+                Intent result=new Intent().putExtra("SCAN_RESULT","stagepilot://"+host+":"+port+"/"+token).putExtra("SCAN_RESULT_FORMAT","QR_CODE");
+                activity.onActivityResult(com.google.zxing.integration.android.IntentIntegrator.REQUEST_CODE,Activity.RESULT_OK,result);
+            });
+            check(waitFor(()->uiBoolean(activity::testReady),4000),"Scanner result opens an authenticated connection without typing an IP, port or key");
+
 
         }catch(Exception ex){try{check(false,"Unexpected error: "+ex);StringWriter trace=new StringWriter();ex.printStackTrace(new PrintWriter(trace));Bundle detail=new Bundle();detail.putString("stream",trace.toString());sendStatus(0,detail);}catch(Exception ignored){}}
         writeReport();

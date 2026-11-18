@@ -22,3 +22,10 @@ Zen Kaku Gothic New Regular and Bold are embedded in the Windows executable and 
 ## Windows Media Foundation
 
 カメラと動画の処理はWindows標準のMedia Foundation APIを使用します。OSの動画DLLやFFmpegは同梱しません。FFmpeg/ffprobeは開発環境での検証だけに使用しています。
+
+
+## Pairing QR
+
+Windows renders pairing codes locally with Project Nayuki's [QR Code generator library 1.8.0](https://github.com/nayuki/QR-Code-generator/tree/v1.8.0/cpp), under the MIT license. The original license appears in both files in ThirdParty/QRCode.
+
+Android decodes pairing codes locally with [ZXing Android Embedded 4.3.0](https://github.com/journeyapps/zxing-android-embedded/tree/v4.3.0) and its [ZXing](https://github.com/zxing/zxing) and AndroidX dependencies under the Apache License 2.0. See Licenses/Apache-2.0.txt.

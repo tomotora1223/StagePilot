@@ -870,7 +870,7 @@ public:
     }
     bool keyStateChanged(bool) override {effects.releaseKeys();return false;}
     void paint(Graphics& g) override {
-        g.fillAll(bg);g.setColour(ink);g.setFont(uiFont(28,Font::bold));g.drawText("StagePilot",28,14,210,40,Justification::centredLeft);g.setColour(muted);g.setFont(uiFont(12));g.drawText(jp("ライブ演奏 / 0.21"),30,53,260,22,Justification::centredLeft);
+        g.fillAll(bg);g.setColour(ink);g.setFont(uiFont(28,Font::bold));g.drawText("StagePilot",28,14,210,40,Justification::centredLeft);g.setColour(muted);g.setFont(uiFont(12));g.drawText(jp("ライブ演奏 / 0.22"),30,53,260,22,Justification::centredLeft);
         g.setColour(Colour(0xff2b3643));g.drawHorizontalLine(140,24.0f,getWidth()-24.0f);
         if(performancePage()){g.setColour(panel);g.fillRoundedRectangle(410,globalTitle.getY()-7.0f,getWidth()-434.0f,70,8);}
     }
@@ -932,7 +932,7 @@ class App : public JUCEApplication {
     std::unique_ptr<RemoteFixture> remoteFixture;
 public:
     const String getApplicationName() override {return "StagePilot";}
-    const String getApplicationVersion() override {return "0.21.0";}
+    const String getApplicationVersion() override {return "0.22.0";}
     void initialise(const String& commandLine) override {
         LookAndFeel::setDefaultLookAndFeel(&defaultTheme);installJapanese();
         auto args=StringArray::fromTokens(commandLine,true);args.removeEmptyStrings();for(auto& s:args)s=s.unquoted();
@@ -950,6 +950,19 @@ public:
         if(args.size()>=2&&args[0]=="--self-test") {int result=runTests(File(args[1]),args.size()>2?args[2]:String());setApplicationReturnValue(result);quit();return;}
         if(args.size()>=2&&args[0]=="--remote-test") {setApplicationReturnValue(runRemoteTests(File(args[1])));quit();return;}
         if(args.size()>=4&&args[0]=="--remote-fixture") {remoteFixture=std::make_unique<RemoteFixture>(File(args[1]),args[2].getIntValue(),args[3]);return;}
+        if(args.size()>=2&&args[0]=="--remote-qr-test") {
+            File target(args[1]);
+            target.getParentDirectory().createDirectory();
+            TemporaryFile tmp(target);
+            PNGImageFormat png;
+            bool written=false;
+            {
+                FileOutputStream out(tmp.getFile());
+                written=out.openedOk()&&png.writeImageToStream(renderPairingQr("stagepilot://10.0.2.2:19780/stagepilot-test"),out);
+            }
+            setApplicationReturnValue(written&&tmp.overwriteTargetFileWithTemporary()?0:1);
+            quit();return;
+        }
         if(args.size()>=2&&args[0]=="--catalog-regression") {
             File directory(args[1]);
             InstrumentBrowser browser([](File){},directory.getChildFile("folders.txt"),true,false);

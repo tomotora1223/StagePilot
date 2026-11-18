@@ -45,6 +45,14 @@ int runRemoteTests(const File& report){
         check(accepted&&repeated&&e.activeScene==0&&e.performanceTranspose==-3&&
               std::abs(e.masterValue.load()-.45f)<.001f&&e.slots[1].gain==.25f,
               "Protocol "+String(protocol)+": same-block button actions execute in order and deduplicate");
+        const bool mod=(bool)send(command("modulation",prefix+"modulation",0,73))["ok"];
+        const bool expr=(bool)send(command("expression",prefix+"expression",0,26))["ok"];
+        render();
+        const auto wheels=server.state();
+        check(mod&&expr&&(int)wheels["modulation"]==73&&(int)wheels["expression"]==26,
+              "Protocol "+String(protocol)+": both MIDI wheels hold independently and report their current positions");
+        check(!(bool)send(command("modulation",prefix+"invalid-wheel",0,128))["ok"],
+              "Protocol "+String(protocol)+": reject MIDI CC outside the 7-bit range");
         const auto invalid=String("batch:")+R"json([{"action":"transpose","value":12},{"action":"scene","index":7}])json";
         const bool rejected=!(bool)send(command(invalid,prefix+"invalid-compound"))["ok"];
         render();
@@ -84,6 +92,12 @@ int runRemoteTests(const File& report){
     const int recovered=periods();
     check(raised>centre+6&&std::abs(centre-released)<=1&&std::abs(centre-recovered)<=1,
           "Synth bends a held note and returns to centre on release or timeout");
+    http(command("expression","expression-silence",0,0));
+    render();
+    const bool silent=out.getMagnitude(0,960)==0.0f;
+    http(command("expression","expression-full",0,127));
+    render();
+    check(silent&&out.getMagnitude(0,960)>0.0f,"CC11 changes held-note output in the built-in synth");
     check(!(bool)JSON::parse(streamCall(port,command("master","invalid-value",0,1.5f),true))["ok"],"Out-of-range master value rejected");server.allowCommands(false);check(!(bool)JSON::parse(streamCall(port,command("effect","busy"),true))["ok"],"Plugin loading gate rejects remote audio operations");server.allowCommands(true);
     auto huge=command("instrument","huge-index");huge.getDynamicObject()->setProperty("index",(int64_t)4294967296LL);check(!(bool)JSON::parse(streamCall(port,huge,true))["ok"],"64-bit source index cannot wrap around into an available instrument");auto fraction=command("instrument","fraction-index");fraction.getDynamicObject()->setProperty("index",.5);check(!(bool)JSON::parse(streamCall(port+1,fraction,false))["ok"],"Fractional source index rejected on TCP");
     auto packet=oscCommand(command("effect","osc-padded"));check(!RemoteService::decodeOsc(packet.getData(),(int)packet.getSize()-1).isObject(),"Truncated OSC rejected");check(!RemoteService::decodeOsc("not an OSC packet",16).isObject(),"Unknown OSC address rejected");

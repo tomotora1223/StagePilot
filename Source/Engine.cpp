@@ -43,6 +43,9 @@ class TestSynth final : public juce::AudioPluginInstance {
     std::array<Voice, 64> voices{};
     std::array<bool,16> pedal{};
     std::array<double,16> bend{};
+    std::array<float,16> modulation{}, expression{};
+    double vibratoPhase=0;
+    bool vibratoActive=false;
     SynthParameter *brightness, *release;
 public:
     TestSynth() : AudioPluginInstance(BusesProperties().withOutput("Stereo", juce::AudioChannelSet::stereo(), true)) {
@@ -51,7 +54,7 @@ public:
     }
     const juce::String getName() const override { return juce::String::fromUTF8("内蔵シンセ"); }
     void fillInPluginDescription(juce::PluginDescription& d) const override { d.name = getName(); d.pluginFormatName = "Internal"; d.fileOrIdentifier = "stage:sine"; d.isInstrument = true; d.numOutputChannels = 2; }
-    void prepareToPlay(double sr, int n) override { setRateAndBufferSizeDetails(sr,n); for(auto& v: voices) v = {}; pedal.fill(false); bend.fill(1.0); }
+    void prepareToPlay(double sr, int n) override { setRateAndBufferSizeDetails(sr,n); for(auto& v: voices) v = {}; pedal.fill(false); bend.fill(1.0); modulation.fill(0); expression.fill(1); vibratoPhase=0; vibratoActive=false; }
     void releaseResources() override {}
     void processBlock(juce::AudioBuffer<float>& b, juce::MidiBuffer& midi) override {
         b.clear();
@@ -63,6 +66,11 @@ public:
                 *v = {true,true,m.getNoteNumber(),ch,0,juce::MathConstants<double>::twoPi*juce::MidiMessage::getMidiNoteInHertz(m.getNoteNumber())/getSampleRate(),0,m.getFloatVelocity()};
             } else if (m.isPitchWheel()) {
                 bend[(size_t)ch-1]=std::exp2((m.getPitchWheelValue()-8192)/(8192.0*6.0));
+            } else if (m.isController()&&m.getControllerNumber()==1) {
+                modulation[(size_t)ch-1]=m.getControllerValue()/127.0f;
+                vibratoActive=std::any_of(modulation.begin(),modulation.end(),[](float amount){return amount>0;});
+            } else if (m.isController()&&m.getControllerNumber()==11) {
+                expression[(size_t)ch-1]=m.getControllerValue()/127.0f;
             } else if (m.isNoteOff()) {
                 for(auto& v: voices) if(v.note == m.getNoteNumber() && v.channel == ch) v.down = false;
             } else if (m.isSustainPedalOn()) pedal[(size_t)ch-1] = true;
@@ -74,15 +82,21 @@ public:
         const auto sr = getSampleRate();
         const float decay = std::exp(-1.0f / ((float)sr * release->get()));
         const auto tone=brightness->get()*0.25;
+        const double vibratoStep=juce::MathConstants<double>::twoPi*5.0/sr;
         for (int n = 0; n < b.getNumSamples(); ++n) {
             while(nextMidi!=midi.end()&&(*nextMidi).samplePosition<=n){applyMidi((*nextMidi).getMessage());++nextMidi;}
+            const double vibrato=vibratoActive?0.016*std::sin(vibratoPhase):0.0;
+            if(vibratoActive){
+                vibratoPhase+=vibratoStep;
+                if(vibratoPhase>=juce::MathConstants<double>::twoPi)vibratoPhase-=juce::MathConstants<double>::twoPi;
+            }
             float sum = 0;
             for(auto& v: voices) if(v.on) {
                 bool hold = v.down || pedal[(size_t)v.channel-1];
                 v.amp = hold ? std::min(1.0f,v.amp + 1.0f/(float)(sr*0.005)) : v.amp * decay;
                 if (v.amp < 0.00001f && !hold) { v.on = false; continue; }
-                sum += (float)(std::sin(v.phase) + tone * std::sin(3*v.phase)) * v.amp * v.velocity * 0.12f;
-                v.phase += v.step*bend[(size_t)v.channel-1];
+                sum += (float)(std::sin(v.phase) + tone * std::sin(3*v.phase)) * v.amp * v.velocity * expression[(size_t)v.channel-1] * 0.12f;
+                v.phase += v.step*bend[(size_t)v.channel-1]*(1+vibrato*modulation[(size_t)v.channel-1]);
                 if(v.phase > juce::MathConstants<double>::twoPi) v.phase -= juce::MathConstants<double>::twoPi;
             }
             for(int c=0;c<b.getNumChannels();++c) b.setSample(c,n,sum);
@@ -125,6 +139,8 @@ void Engine::startPreview(int note,int velocity){
 void Engine::resetRouting() {
     remotePitch=8192;
     remotePitchSent.fill(8192);
+    for(auto& wheel:remoteWheels)wheel=-1;
+    for(auto& slot:remoteWheelsSent)slot={0,127};
     sequence.reset();outputMeter.reset();outputPeak=0;
     for(auto& key:inputKeys)key=0;
     previewVoices.fill({});previewKey=-1;previewLeft=0;
@@ -210,6 +226,7 @@ void Engine::refreshActive() {
             if(!s.running||s.retiring){s.running=true;s.retiring=false;s.tailActive=false;s.tailRemaining=0;s.gate.reset(rate.load(),mode.load()==1?transitionSeconds.load():0.005);s.gate.setTargetValue(1);}
             syncPedal(i);
             syncRemotePitch(i);
+            syncRemoteWheels(i);
         }else if(s.running&&!s.retiring){s.retiring=true;s.tailActive=true;s.tailLeft=(int64_t)((mode.load()==0?tailSeconds.load():mode.load()==1?transitionSeconds.load():.005f)*rate.load());releaseForSwitch(i);syncRemotePitch(i);
             if(mode.load()!=0){s.gate.reset(rate.load(),mode.load()==1?transitionSeconds.load():0.005);s.gate.setTargetValue(0);silence(i,false);}}
     }
@@ -263,6 +280,24 @@ void Engine::setRemotePitch(int value) {
     remotePitchUntil=juce::Time::getMillisecondCounter()+600;
     for(int i=0;i<slotCount;++i)syncRemotePitch(i);
 }
+void Engine::syncRemoteWheels(int slot) {
+    if(!wanted(slot))return;
+    constexpr int controllers[]{1,11}, neutral[]{0,127};
+    for(size_t wheel=0;wheel<remoteWheels.size();++wheel){
+        const int requested=remoteWheels[wheel].load();
+        const int value=requested>=0?requested:neutral[wheel];
+        auto& sent=remoteWheelsSent[(size_t)slot][wheel];
+        if(value==sent)continue;
+        for(int ch=1;ch<=16;++ch)
+            dispatch(slot,juce::MidiMessage::controllerEvent(ch,controllers[wheel],value));
+        sent=value;
+    }
+}
+void Engine::setRemoteWheel(int wheel,int value) {
+    if(!juce::isPositiveAndBelow(wheel,(int)remoteWheels.size()))return;
+    remoteWheels[(size_t)wheel]=value;
+    for(int i=0;i<slotCount;++i)syncRemoteWheels(i);
+}
 void Engine::execute(int a,int i,float value,int p) {
     switch(a) {
     case SelectScene:selectScene(i);break;
@@ -277,11 +312,12 @@ void Engine::execute(int a,int i,float value,int p) {
     case FadeOut:master.reset(rate.load(),fadeSeconds.load());master.setTargetValue(0);break;
     case Restore:master.reset(rate.load(),0.02);master.setTargetValue(masterValue.load());break;
     case Panic:
-        setRemotePitch(8192);stopPreview();sequence.stop(true);rangeLearning=false;rangeLearned=-1;masterFx.reset();for(auto& slot:slots)slot.fx.reset();
+        setRemotePitch(8192);setRemoteWheel(0,0);setRemoteWheel(1,127);stopPreview();sequence.stop(true);rangeLearning=false;rangeLearned=-1;masterFx.reset();for(auto& slot:slots)slot.fx.reset();
         for(auto& key:inputKeys)key=0;
         for(int s=0;s<slotCount;++s) { silence(s,true);slots[(size_t)s].retiring=!wanted(s);slots[(size_t)s].tailLeft=0; }
         for(int c=0;c<clipCount;++c)stopClip(c,true);
         sustain.fill(0);pedalDown=false;break;
+    case RemoteWheel:setRemoteWheel(i,(int)value);break;
     case RemotePitch:setRemotePitch((int)value);break;
     case MasterStep:if(value!=0)execute(Master,0,masterValue.load()+value,0);break;
     case Master:masterValue=juce::jlimit(0.0f,1.0f,value);master.reset(rate.load(),0.02);master.setTargetValue(masterValue.load());break;

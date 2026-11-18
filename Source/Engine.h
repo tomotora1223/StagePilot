@@ -55,7 +55,7 @@ public:
 
 enum Action { Select, Next, Previous, FadeOut, Restore, Panic, Master, SlotGain, Parameter,
               LayerToggle, ClipPlay, ClipStop, ClipStopAll, SetTranspose, SetLayer, SequencePlay, SequenceStop,
-              SelectScene, NextScene, PreviousScene, PerformanceTranspose, SetIgnorePedal, SequenceGain, PerformanceTransposeStep, NextPerformance, PreviousPerformance, MasterStep, RemotePitch };
+              SelectScene, NextScene, PreviousScene, PerformanceTranspose, SetIgnorePedal, SequenceGain, PerformanceTransposeStep, NextPerformance, PreviousPerformance, MasterStep, RemotePitch, RemoteWheel };
 inline bool sceneTarget(int action){return action==SelectScene;}
 inline bool instrumentTarget(int action) {return action==Select||action==SlotGain||action==Parameter||action==LayerToggle;}
 inline bool clipTarget(int action) {return action==ClipPlay||action==ClipStop;}
@@ -155,6 +155,7 @@ public:
     void audioDeviceAboutToStart(juce::AudioIODevice*) override;
     void audioDeviceStopped() override;
     void handleIncomingMidiMessage(juce::MidiInput*, const juce::MidiMessage&) override;
+    std::array<std::atomic<int>,2> remoteWheels{{-1,-1}}; // -1 before the first phone adjustment
     void resetRouting(); // call only with callback detached
     void restoreScene(); // call only with callback detached
 private:
@@ -177,6 +178,9 @@ private:
     std::array<int,slotCount> remotePitchSent{};
     void setRemotePitch(int value);
     void syncRemotePitch(int slot);
+    std::array<std::array<int,2>,slotCount> remoteWheelsSent{};
+    void setRemoteWheel(int wheel,int value);
+    void syncRemoteWheels(int slot);
     void stopPreview();
     void releasePreview(int slot);
     void execute(int action, int slot, float value, int parameter);

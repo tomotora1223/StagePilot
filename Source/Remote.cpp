@@ -26,7 +26,10 @@ bool RemoteService::available(const String& kind,int index)const{
     if(auto* items=catalog["items"].getArray())for(auto& item:*items)if(item["kind"].toString()==kind&&(int)item["index"]==index)return true;return false;
 }
 var RemoteService::state(){
-    std::lock_guard<std::mutex> guard(mutex);auto* o=new DynamicObject();o->setProperty("ok",true);o->setProperty("version",1);o->setProperty("transposeStep",true);o->setProperty("remoteControls",true);o->setProperty("items",catalog["items"]);o->setProperty("session",catalog["session"]);
+    std::lock_guard<std::mutex> guard(mutex);auto* o=new DynamicObject();o->setProperty("ok",true);o->setProperty("version",1);o->setProperty("transposeStep",true);o->setProperty("remoteControls",true);o->setProperty("remoteWheels",true);
+    o->setProperty("modulation",jmax(0,engine.remoteWheels[0].load()));
+    const int expression=engine.remoteWheels[1].load();
+    o->setProperty("expression",expression<0?127:expression);o->setProperty("items",catalog["items"]);o->setProperty("session",catalog["session"]);
     o->setProperty("scene",engine.activeScene.load());o->setProperty("instrument",engine.selected.load());o->setProperty("master",engine.masterValue.load());o->setProperty("transpose",engine.performanceTranspose.load());o->setProperty("nowMs",Time::currentTimeMillis());o->setProperty("ready",accepting.load());
     Array<var> playing;for(int i=0;i<clipCount;++i)if(engine.clips[(size_t)i].playing)playing.add(i);o->setProperty("playing",playing);o->setProperty("received",received.load());o->setProperty("rejected",rejected.load());return var(o);
 }
@@ -60,7 +63,7 @@ var RemoteService::request(const var& input){
             event.a=action=="next"?NextPerformance:PreviousPerformance;
         }else if(action=="transposeStep"){
             auto v=command["value"];if((!v.isDouble()&&!integer(v))||((double)v!=1.0&&(double)v!= -1.0))return String("value");event.a=PerformanceTransposeStep;event.value=(float)v;
-        }else if(action=="master"||action=="transpose"||action=="masterStep"||action=="pitch"||action=="slotGain"){
+        }else if(action=="master"||action=="transpose"||action=="masterStep"||action=="pitch"||action=="slotGain"||action=="modulation"||action=="expression"){
             auto v=command["value"];if(!v.isDouble()&&!integer(v))return String("value");float value=(float)v;if(!std::isfinite(value))return String("value");
             if(action=="master"||action=="slotGain"){
                 if(value<0||value>1)return String("value");
@@ -69,6 +72,9 @@ var RemoteService::request(const var& input){
             }else if(action=="masterStep"){
                 if(value< -1||value>1)return String("value");
                 event.a=MasterStep;
+            }else if(action=="modulation"||action=="expression"){
+                if(value<0||value>127||std::floor(value)!=value)return String("value");
+                event.a=RemoteWheel;event.b=action=="modulation"?0:1;
             }else if(action=="pitch"){
                 if(value<0||value>16383||std::floor(value)!=value)return String("value");
                 event.a=RemotePitch;
@@ -88,7 +94,7 @@ var RemoteService::request(const var& input){
             if(!operation.isObject())return fail("batch");
             Event command;
             const auto error=decode(operation,operation["action"].toString(),command);
-            if(error.isNotEmpty()||command.a==RemotePitch)return fail(error.isNotEmpty()?error:"batch");
+            if(error.isNotEmpty()||(command.a==RemotePitch||command.a==RemoteWheel))return fail(error.isNotEmpty()?error:"batch");
             event.batch[event.a++]={command.a,command.b,command.value};
         }
     }else{
