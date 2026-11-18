@@ -1,0 +1,11 @@
+<resources>
+    <style name="StagePilotTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">@font/stage_ui</item>
+        <item name="android:colorAccent">#72d6c2</item>
+        <item name="android:windowBackground">#101419</item>
+        <item name="android:statusBarColor">#101419</item>
+        <item name="android:navigationBarColor">#101419</item>
+        <item name="android:colorControlHighlight">#3372d6c2</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

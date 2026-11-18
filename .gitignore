@@ -1,0 +1,11 @@
+build/
+.gradle/
+.idea/
+local.properties
+*.apk
+*.jks
+*.keystore
+*.exe
+update.log
+.stagepilot-update-*/
+no-auto-update
