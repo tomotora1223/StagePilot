@@ -322,7 +322,8 @@ public final class MainActivity extends Activity {
                 try{
                     JSONObject pad=first.operation();
                     String caption=name.getText().toString().trim();
-                    if(caption.isEmpty())caption=first.labels.get(first.action.getSelectedItemPosition());
+                    if(caption.isEmpty())caption=first.key().equals("transpose")?
+                        "移調 "+shiftLabel(pad.optInt("value")):first.labels.get(first.action.getSelectedItemPosition());
                     pad.put("name",caption.substring(0,Math.min(caption.length(),24))).put("color",COLOURS[color.getSelectedItemPosition()]);
                     JSONArray extra=new JSONArray();
                     if(!first.key().equals("pitch"))for(OperationEditor editor:editors)extra.put(editor.operation());

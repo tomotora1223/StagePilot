@@ -159,7 +159,7 @@ public:
     void restoreScene(); // call only with callback detached
 private:
     juce::AudioBuffer<float> masterFxBuffer;
-    Queue<Event, 4096> queue;
+    const std::unique_ptr<Queue<Event,4096>> queue=std::make_unique<Queue<Event,4096>>();
     std::atomic<bool> overflowPanic{false};
     juce::SmoothedValue<float> master;
     std::array<std::array<uint8_t, 128>, 16> owners{};

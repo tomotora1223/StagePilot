@@ -917,7 +917,9 @@ class App : public JUCEApplication {
     };
     std::unique_ptr<Window> window;
     void startUpdater() {
-        const auto folder=File::getSpecialLocation(File::currentExecutableFile).getParentDirectory();
+        const auto executable=File::getSpecialLocation(File::currentExecutableFile);
+        if(!executable.getFileName().equalsIgnoreCase("StagePilot.exe"))return;
+        const auto folder=executable.getParentDirectory();
         const auto updater=folder.getChildFile("Update-StagePilot.ps1");
         if(!updater.existsAsFile()||folder.getChildFile("no-auto-update").exists())return;
         const auto systemRoot=SystemStats::getEnvironmentVariable("SystemRoot","C:/Windows");
@@ -948,6 +950,11 @@ public:
         if(args.size()>=2&&args[0]=="--self-test") {int result=runTests(File(args[1]),args.size()>2?args[2]:String());setApplicationReturnValue(result);quit();return;}
         if(args.size()>=2&&args[0]=="--remote-test") {setApplicationReturnValue(runRemoteTests(File(args[1])));quit();return;}
         if(args.size()>=4&&args[0]=="--remote-fixture") {remoteFixture=std::make_unique<RemoteFixture>(File(args[1]),args[2].getIntValue(),args[3]);return;}
+        if(args.size()>=2&&args[0]=="--catalog-regression") {
+            File directory(args[1]);
+            InstrumentBrowser browser([](File){},directory.getChildFile("folders.txt"),true,false);
+            setApplicationReturnValue(browser.testRescan(directory)?0:1);quit();return;
+        }
         if(args.size()>=2&&args[0]=="--catalog-test") {Theme theme;InstrumentBrowser browser([](File){},File(args[1]).getChildFile("folders.txt"));browser.setLookAndFeel(&theme);setApplicationReturnValue(browser.testInstalled(File(args[1]))?0:1);browser.setLookAndFeel(nullptr);quit();return;}
         if(args.size()>=2&&args[0]=="--ui-test") {auto component=std::make_unique<Main>(true);setApplicationReturnValue(component->runUiTest(File(args[1]),args.size()>2?args[2]:String()));component.reset();quit();return;}
         if(args.size()>=3&&args[0]=="--design-check") {auto component=std::make_unique<Main>(true);setApplicationReturnValue(component->runDesignCheck(File(args[1]),File(args[2])));component.reset();quit();return;}

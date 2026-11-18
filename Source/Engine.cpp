@@ -104,7 +104,7 @@ public:
 std::unique_ptr<juce::AudioPluginInstance> makeTestSynth() { return std::make_unique<TestSynth>(); }
 
 Engine::Engine() { master.setCurrentAndTargetValue(0.7f);sequence.plugin=makeTestSynth();sequence.plugin->fillInPluginDescription(sequence.description);sequence.name=sequence.description.name;for(int i=0;i<sceneCount;++i)scenes[(size_t)i].name=juce::String::fromUTF8("組み合わせ ")+juce::String(i+1); }
-bool Engine::post(const Event& e) { if(queue.push(e)) return true; ++dropped; overflowPanic.store(true); return false; }
+bool Engine::post(const Event& e) { if(queue->push(e)) return true; ++dropped; overflowPanic.store(true); return false; }
 void Engine::control(int a,int s,float v,int p) { Event e; e.type=Event::Control;e.a=a;e.b=s;e.c=p;e.value=v;post(e); }
 void Engine::midi(int s,int a,int b) { Event e;e.a=s;e.b=a;e.c=b;post(e); }
 void Engine::preview(int note,int velocity){Event e;e.type=Event::LivePreview;e.a=note;e.b=velocity;post(e);}
@@ -128,7 +128,7 @@ void Engine::resetRouting() {
     sequence.reset();outputMeter.reset();outputPeak=0;
     for(auto& key:inputKeys)key=0;
     previewVoices.fill({});previewKey=-1;previewLeft=0;
-    Event e; while(queue.pop(e)) {}
+    Event e; while(queue->pop(e)) {}
     for(auto& row:owners) row.fill(0);
     for(auto& slot:noteTargets)for(auto& row:slot)row.fill(-1);
     for(auto& row:consumed) row.fill(false);
@@ -363,7 +363,7 @@ void Engine::render(float* const* out,int channels,int n) {
     Event e;int count=0;
     if(remotePitch!=8192&&(juce::int32)(juce::Time::getMillisecondCounter()-remotePitchUntil)>=0)
         setRemotePitch(8192);
-    while(count++<4096 && queue.pop(e)) {
+    while(count++<4096 && queue->pop(e)) {
         if(e.type==Event::SceneEdit){if(e.a>=0&&e.a<sceneCount&&e.b>=0&&e.b<slotCount&&validPart(e.part)){scenes[(size_t)e.a].parts[(size_t)e.b]=e.part;if(activeScene==e.a){applyScenePart(e.b,e.part,true);refreshActive();}}}
         else if(e.type==Event::PedalSettings){if(e.a>=0&&e.a<sceneCount&&e.b>=0&&e.b<slotCount){scenes[(size_t)e.a].parts[(size_t)e.b].ignorePedal=e.c!=0;if(activeScene==e.a){slots[(size_t)e.b].ignorePedal=e.c!=0;syncPedal(e.b);}}}
         else if(e.type==Event::GainSettings){if(e.a>=0&&e.a<sceneCount&&e.b>=0&&e.b<slotCount&&std::isfinite(e.value)){auto v=juce::jlimit(0.0f,1.0f,e.value);scenes[(size_t)e.a].parts[(size_t)e.b].gain=v;if(activeScene==e.a)execute(SlotGain,e.b,v,0);}}
@@ -373,7 +373,10 @@ void Engine::render(float* const* out,int channels,int n) {
         else if(e.type==Event::LivePreview)startPreview(e.a,e.b);
         else if(e.type==Event::Midi) route(e);
         else if(e.type==Event::RemoteBatch) {
-            for(int n=0;n<e.a;++n)execute(e.batch[n].action,e.batch[n].index,e.batch[n].value,0);
+            for(int operation=0;operation<e.a;++operation){
+                const auto& control=e.batch[operation];
+                execute(control.action,control.index,control.value,0);
+            }
         }
         else if(e.type==Event::Control) execute(e.a,e.b,e.value,e.c);
         else if(e.type==Event::Bind&&e.a>=0&&e.a<mappingCount) {bindings[(size_t)e.a]=e.mapping;pressed[(size_t)e.a]=false;}

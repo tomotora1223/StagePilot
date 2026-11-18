@@ -55,6 +55,7 @@ class InstrumentBrowser final : public juce::Component, private juce::ListBoxMod
     std::function<void(juce::File)> onSelect;
     juce::String selectedPath;
     int revision=0,shownRevision=-1;
+    const bool includeDefaultRoots;
     bool ignoreCache=false, pendingScan=false, pendingForce=false;
     static bool within(const juce::File& file,const juce::StringArray& locations) {
         for(const auto& path:locations)if(file==juce::File(path)||file.isAChildOf(juce::File(path)))return true;
@@ -168,7 +169,7 @@ class InstrumentBrowser final : public juce::Component, private juce::ListBoxMod
         pendingScan=false;pendingForce=false;
         ignoreCache=force;
         {juce::ScopedLock lock(mutex);progress=jp("インストール済みの音源を探しています…");}
-        roots=defaultPluginRoots();for(const auto& root:customRoots)roots.addIfNotAlreadyThere(root,true);
+        roots=includeDefaultRoots?defaultPluginRoots():juce::StringArray();for(const auto& root:customRoots)roots.addIfNotAlreadyThere(root,true);
         {
             juce::ScopedLock lock(mutex);
             std::erase_if(discovered,[&](const Entry& e){return !within(e.file,roots)||!e.file.exists();});
@@ -220,8 +221,8 @@ class InstrumentBrowser final : public juce::Component, private juce::ListBoxMod
     void addSelected(){auto row=list.getSelectedRow();if(row>=0&&row<getNumRows()){auto e=entries[(size_t)visible[(size_t)row]];if(e.instrument&&onSelect)onSelect(e.file);}}
     void listBoxItemDoubleClicked(int,const juce::MouseEvent&) override{addSelected();}
 public:
-    InstrumentBrowser(std::function<void(juce::File)> select,const juce::File& configFile,bool automatic=true)
-      :juce::Thread("Instrument search"),config(configFile),onSelect(std::move(select)){
+    InstrumentBrowser(std::function<void(juce::File)> select,const juce::File& configFile,bool automatic=true,bool includeStandard=true)
+      :juce::Thread("Instrument search"),config(configFile),onSelect(std::move(select)),includeDefaultRoots(includeStandard){
         for(auto* c:std::vector<juce::Component*>{&search,&format,&failures,&rescan,&stop,&folder,&add,&title,&hint,&status,&details,&list})addAndMakeVisible(c);
         title.setText(jp("使いたい音源を選ぶ"),juce::dontSendNotification);title.setFont(uiFont(23));
         hint.setText(jp("VST2・VST3の標準フォルダーを自動検索します。音源の確認は別プロセスで行います。"),juce::dontSendNotification);
@@ -250,6 +251,30 @@ public:
         search.setText("piano",false);filter();list.selectRow(0);ok&=add.isEnabled();addSelected();
         search.setText("missing",false);filter();ok&=getNumRows()==0&&!add.isEnabled();search.setText({},false);format.setSelectedId(1,juce::dontSendNotification);failures.setToggleState(true,juce::dontSendNotification);filter();list.selectRow(2);ok&=getNumRows()==3&&!add.isEnabled();
         list.selectRow(0);auto img=createComponentSnapshot(getLocalBounds());juce::FileOutputStream out(snapshot);out.setPosition(0);out.truncate();juce::PNGImageFormat png;return png.writeImageToStream(img,out)&&ok;
+    }
+    bool testRescan(const juce::File& output) {
+        const bool first=testInstalled(output);
+        const auto foundMarker=[&]{
+            return std::any_of(entries.begin(),entries.end(),[](const Entry& e){return e.name=="ScanMarker";});
+        };
+        bool both=foundMarker()&&customRoots.size()==2;
+        search.setText({},false);
+        begin(true);
+        bool retains=std::any_of(entries.begin(),entries.end(),[](const Entry& e){return e.instrument&&e.name.containsIgnoreCase("Keyzone");});
+        begin(true); // Request another scan while the first is still running.
+        const auto started=juce::Time::getMillisecondCounter();
+        while((pendingScan||isThreadRunning())&&juce::Time::getMillisecondCounter()-started<45000)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil(50);
+        timerCallback();
+        bool retry=!pendingScan&&!isThreadRunning()&&foundMarker();
+        auto report=std::make_unique<juce::DynamicObject>();
+        const bool success=first&&both&&retains&&retry;
+        report->setProperty("foundBothRoots",both);
+        report->setProperty("retainedDuringRefresh",retains);
+        report->setProperty("restartCompleted",retry);
+        report->setProperty("passed",success);
+        output.getChildFile("rescan.json").replaceWithText(juce::JSON::toString(juce::var(report.release())));
+        return success;
     }
     bool testInstalled(const juce::File& output){
         auto started=juce::Time::getMillisecondCounter();
