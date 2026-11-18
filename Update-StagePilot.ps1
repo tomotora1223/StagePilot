@@ -14,7 +14,7 @@ $targetExe = Join-Path $appDirectory 'StagePilot.exe'
 if ((Test-Path -LiteralPath (Join-Path $appDirectory 'no-auto-update')) -or !(Test-Path -LiteralPath $targetExe -PathType Leaf)) { exit 0 }
 
 $repo = 'tomotora1223/StagePilot'
-$apiHeaders = @{ 'User-Agent' = 'StagePilot-Updater'; 'Accept' = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
+$apiHeaders = @{ 'User-Agent' = 'StagePilot-Updater'; 'Accept' = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28'; 'Cache-Control' = 'no-cache' }
 $staging = $null
 $locked = $false
 $mutex = New-Object Threading.Mutex($false, 'Local\StagePilotReleaseUpdater')
@@ -43,7 +43,7 @@ try {
     $staging = Join-Path $appDirectory ('.stagepilot-update-' + [guid]::NewGuid().ToString('N'))
     [void](New-Item -ItemType Directory -Path $staging)
     $zip = Join-Path $staging $assetName
-    Invoke-WebRequest -Uri $expectedUrl -UseBasicParsing -OutFile $zip -TimeoutSec 120
+    Invoke-WebRequest -Uri ($expectedUrl + '?sha256=' + $expectedHash) -UseBasicParsing -OutFile $zip -TimeoutSec 120
     if ((Get-Item -LiteralPath $zip).Length -ne $asset[0].size -or
         (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne $expectedHash) { throw 'Release ZIP checksum mismatch' }
     Add-Type -AssemblyName System.IO.Compression.FileSystem
