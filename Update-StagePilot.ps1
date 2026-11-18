@@ -4,6 +4,10 @@
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+# Use Windows PowerShell's own modules, even when started from PowerShell 7.
+$env:PSModulePath = Join-Path $PSHOME 'Modules'
+Import-Module (Join-Path $env:PSModulePath 'Microsoft.PowerShell.Management') -ErrorAction Stop
+Import-Module (Join-Path $env:PSModulePath 'Microsoft.PowerShell.Utility') -ErrorAction Stop
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $appDirectory = $PSScriptRoot
 $targetExe = Join-Path $appDirectory 'StagePilot.exe'
